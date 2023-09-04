@@ -1,0 +1,654 @@
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🍚 缘分早餐工程队 V5.0</title>
+    <script src="./qrcode.min.js"></script>
+    <link rel="stylesheet" href="https://unpkg.com/vant@2.12/lib/index.css" />
+    <script src="https://unpkg.com/vue@2.6/dist/vue.min.js"></script>
+    <script src="https://unpkg.com/vant@2.12/lib/vant.min.js"></script>
+</head>
+
+<body>
+    <div id="app">
+        <van-overlay :show="loading">
+            <div class="wrapper" @click.stop>
+                <van-loading type="spinner" vertical size="24px">加载中...</van-loading>
+            </div>
+        </van-overlay>
+        <div class="page_cont">
+            <van-sidebar class="side_bar" v-model="active" @change="initData">
+                <van-sidebar-item v-for="(item,index) in personList" :key="item.name">
+                    <template #title>
+                        <div class="side_bar_item_title">
+                            {{item.name}}
+                            <van-icon class="del_icon" color="rgb(119,132,149)" name="clear"
+                                @click.stop="deletePerson(idx)" />
+                        </div>
+                    </template>
+                </van-sidebar-item>
+            </van-sidebar>
+            <div class="main_cont" v-if="personList.length">
+                <van-tabs swipeable v-model="tabActive" @change="initData">
+                    <van-tab title="取餐">
+                        <div class="order_cont" v-show="!loading">
+                            <template v-if="orderList.length">
+                                <div v-for="(item,index) in orderList" :key="item.orderId">
+                                    <h4 class="title_text">
+                                        <span>{{item.menuDate|formatWeek}}</span>
+                                        <span>&nbsp;&nbsp;</span>
+                                        <span>{{item.menuType|formatMenuType}}</span>
+                                        <van-button class="cancel_btn" round plain color="rgb(119, 132, 149)" hairline
+                                            size="mini"
+                                            @click="cancelOrder(item.orderId)">&nbsp;取&nbsp;消&nbsp;</van-button>
+                                    </h4>
+                                    <p>{{item.menuName|formatMenuName}}</p>
+                                    <div :id="item.orderId">
+                                    </div>
+                                </div>
+                            </template>
+                            <template v-else>
+                                <van-empty description="取餐列表为空" />
+                            </template>
+                        </div>
+                    </van-tab>
+                    <van-tab title="订餐">
+                        <div class="menu_cont" v-show="!loading">
+                            <template v-if="menuList.length">
+                                <van-checkbox-group class="cb_group" v-model="menuChosen" ref="checkboxGroup">
+                                    <van-cell-group>
+                                        <van-cell v-for="(item, index) in menuList" clickable
+                                            :key="`${person.name}_${item.menuId}`" :label="item.name|formatMenuName"
+                                            @click="toggle(index)">
+                                            <template #title>
+                                                <span>{{item.menuDate}}</span>
+                                                <span>【{{item.menuDate|formatWeek}}】</span>
+                                                <span>&nbsp;&nbsp;</span>
+                                                <span>{{item.menuType|formatMenuType}}</span>
+                                            </template>
+                                            <template #right-icon>
+                                                <van-checkbox checked-color="rgb(175, 27, 45)" :name="item"
+                                                    ref="checkboxes" />
+                                            </template>
+                                        </van-cell>
+                                    </van-cell-group>
+                                </van-checkbox-group>
+                                <div class="btn_group">
+                                    <van-button round size="normal" type="default" color="rgb(119, 132, 149)" plain
+                                        hairline
+                                        @click="checkAll">{{menuChosen.length?'重&nbsp;置':'全&nbsp;选'}}</van-button>
+                                    <van-button round size="normal" type="default" color="rgb(119, 132, 149)" plain
+                                        hairline @click="checkAllBreakfast">仅早餐</van-button>
+                                    <van-button round size="normal" type="danger" :loading="menuSaveLoading" hairline
+                                        @click="submitMenu">提&nbsp;交</van-button>
+                                </div>
+                            </template>
+                            <template v-else>
+                                <van-empty description="订餐列表为空" />
+                            </template>
+                        </div>
+                    </van-tab>
+                </van-tabs>
+            </div>
+        </div>
+        <div class="float_btns_cont" v-show="tabActive==0">
+            <!-- <van-button round icon="flag-o" size="normal" type="default" @click="refreshTokens"
+                v-if="personList.length"></van-button> -->
+            <van-button hairline round icon="plus" size="normal" type="default" @click="addPersonList"></van-button>
+        </div>
+        <van-dialog v-model="showDialog" title="添加人员" get-container="body" :show-confirm-button="false">
+            <van-form @submit="onSubmit" ref="form">
+                <van-field v-model="personForm.name" name="name" label="姓名" required placeholder="请输入姓名"
+                    :rules="[{ required: true, message: '请输入姓名' }]"></van-field>
+                <van-field v-model="personForm.url" name="url" label="链接" required type="textarea" rows="2" autosize
+                    placeholder="钉钉取餐码界面，点击右上角的三个点，将链接复制到此处"
+                    :rules="[{ required: true, message: '请输入链接' }]"></van-field>
+                <div class="dialog_btns">
+                    <van-button hairline round block type="default" native-type="button" plain
+                        color="rgb(119, 132, 149)" @click="onCancel">取消</van-button>
+                    <van-button hairline round block type="danger" native-type="submit">提交</van-button>
+                </div>
+            </van-form>
+        </van-dialog>
+    </div>
+</body>
+
+</html>
+
+<script>
+    const jsonFileName = new URLSearchParams(window.location.search).get('name') || 'default';
+    const menuTypeObject = { 1: '早餐', 2: '午餐', 3: '晚餐' };
+    const apiUrls = {
+        getPersonListUrl: "http://81.71.28.247:8888/getPersonList",
+        setPersonListUrl: "http://81.71.28.247:8888/setPersonList",
+        orderListUrl: "http://st.fccdri.com:53080/app/dish/order-list",
+        menuListUrl: "http://st.fccdri.com:53080/app/dish/menu-list",
+        menuSaveUrl: "http://st.fccdri.com:53080/app/dish/order-saveBatch",
+        menuCancelUrl: 'http://st.fccdri.com:53080/app/dish/order-cancel',
+        userLoginUrl: 'http://st.fccdri.com:53080/app/user/login'
+    };
+    new Vue({
+        el: '#app',
+        data: () => {
+            return {
+                personList: [],
+                loading: false,
+                active: 0,
+                tabActive: 0,
+                orderList: [],
+                menuList: [],
+                menuChosen: [],
+                menuSaveLoading: false,
+                showDialog: false,
+                personForm: {
+                    name: '',
+                    url: ''
+                }
+            }
+        },
+        computed: {
+            person() {
+                return this.personList[this.active];
+            }
+        },
+        filters: {
+            /**
+             * 转换周几
+             */
+            formatWeek(date) {
+                const weekArray = new Array("周日", "周一", "周二", "周三", "周四", "周五", "周六");
+                let week = weekArray[new Date(date).getDay()];
+                let result;
+                if (new Date(date).getDate() == new Date().getDate()) {
+                    result = '今天';
+                }
+                else {
+                    result = week;
+                }
+                return result;
+            },
+            /**
+            * base64加密
+            */
+            encode(input) {
+                const _keyStr = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=";
+                let output = "";
+                let chr1, chr2, chr3, enc1, enc2, enc3, enc4;
+                let i = 0;
+                while (i < input.length) {
+                    chr1 = input.charCodeAt(i++);
+                    chr2 = input.charCodeAt(i++);
+                    chr3 = input.charCodeAt(i++);
+                    enc1 = chr1 >> 2;
+                    enc2 = ((chr1 & 3) << 4) | (chr2 >> 4);
+                    enc3 = ((chr2 & 15) << 2) | (chr3 >> 6);
+                    enc4 = chr3 & 63;
+                    if (isNaN(chr2)) {
+                        enc3 = enc4 = 64;
+                    } else if (isNaN(chr3)) {
+                        enc4 = 64;
+                    }
+                    output = output + _keyStr.charAt(enc1) + _keyStr.charAt(enc2) + _keyStr.charAt(enc3) + _keyStr.charAt(enc4);
+                }
+                return output;
+            },
+            /**
+             * 加载餐类型
+             */
+            formatMenuType(type) {
+                let menuType = menuTypeObject[type]
+                return menuType;
+            },
+            /**
+            * 加载餐内容
+            */
+            formatMenuName(name) {
+                return name || '菜单内容未知';
+            },
+        },
+        mounted() {
+            this.initPage();
+        },
+        methods: {
+            /**
+             * 初始化页面时，从后端获取人员名单后再加载数据
+             */
+            async initPage() {
+                this.personList = await this.getPersonList();
+                this.personList.length && this.initData();
+            },
+            /**
+             * 获取人员名单
+             */
+            getPersonList() {
+                let fetchUrl = `${apiUrls.getPersonListUrl}?name=${jsonFileName}`;
+                return new Promise(async (resolve) => {
+                    // * 获取用户名单
+                    let response = await fetch(fetchUrl);
+                    let resJSON = await response.json();
+                    resolve(resJSON.data)
+                })
+            },
+            /**
+             * 加载数据
+             */
+            initData() {
+                this.loading = true;
+                let token = this.person.token;
+                // 页码
+                let page = 1;
+                // 单页条数
+                let limit = 20;
+                if (this.tabActive == 0) {// 取餐
+                    // 未领取
+                    let orderState = 1;
+                    let url = `${apiUrls.orderListUrl}?page=${page}&limit=${limit}&orderState=${orderState}`;
+                    this.orderList = [];
+                    fetch(url, {
+                        method: 'GET',
+                        headers: new Headers({
+                            'Content-Type': 'application/json',
+                            'token': token
+                        })
+                    }).then(res => res.json()).then(res => {
+                        this.loading = false;
+                        if (res.code !== 0) {
+                            vant.Toast(res.msg);
+                            this.refreshTokens();
+                            return;
+                        }
+                        let orderList = res.page.list;
+                        // orderList.unshift({ menuType: 1, menuDate: '2023-02-20', orderId: '2023-02-20 11:50:24' });
+                        this.orderList = orderList;
+                        if (orderList.length) {
+                            let soonBrea = orderList.find(item => item.menuType == 1);
+                            if (soonBrea) {
+                                let { menuDate, orderId } = soonBrea;
+                                let isToday = new Date().getDate() == new Date(menuDate).getDate();
+                                if (isToday && orderId) {
+                                    this.$nextTick(_ => {
+                                        let qrcodeCont = document.getElementById(orderId);
+                                        qrcodeCont.innerHTML = '';
+                                        let base64_orderId = this.$options.filters.encode(orderId);
+                                        new QRCode(qrcodeCont, base64_orderId);
+                                    })
+                                }
+                            }
+                        }
+                    }
+                    )
+                }
+                else {// 订餐
+                    this.menuChosen = [];
+                    this.menuList = [];
+                    let url = `${apiUrls.menuListUrl}?page=${page}&limit=${limit}`;
+                    fetch(url, {
+                        method: 'GET',
+                        headers: new Headers({
+                            'Content-Type': 'application/json',
+                            'token': token
+                        })
+                    }).then(res => res.json()).then(res => {
+                        this.loading = false;
+                        if (res.code !== 0) {
+                            vant.Toast(res.msg);
+                            this.refreshTokens();
+                            return;
+                        }
+                        let menuList = res.page.list.filter(item => !item.orderState).sort((a, b) => { return new Date(a.menuDate) - new Date(b.menuDate) });
+                        this.menuList = menuList;
+                    }
+                    )
+                }
+            },
+            /**
+             * 订餐列表单个选中
+             */
+            toggle(index) {
+                let module = this.$refs[`checkboxes`];
+                module[index].toggle();
+            },
+            /**
+             * 订餐列表全选
+             */
+            checkAll() {
+                let module = this.$refs[`checkboxGroup`];
+                module.toggleAll(!this.menuChosen.length);
+            },
+            /**
+             * 早餐列表全选
+             */
+            checkAllBreakfast() {
+                let module = this.$refs[`checkboxes`];
+                this.menuList.forEach((item, idx) => {
+                    if (item.menuType == 1) {
+                        module[idx].toggle();
+                    }
+                })
+            },
+            /**
+             * 订餐列表提交
+             */
+            submitMenu() {
+                if (!this.menuChosen.length) {
+                    vant.Toast('还未选餐！');
+                }
+                else {
+                    this.menuSaveLoading = true;
+                    let url = `${apiUrls.menuSaveUrl}`;
+                    let token = this.person.token;
+                    fetch(url, {
+                        method: 'POST',
+                        body: JSON.stringify(this.menuChosen),
+                        headers: new Headers({
+                            'Content-Type': 'application/json',
+                            'token': token
+                        })
+                    }).then(res => res.json()).then(res => {
+                        if (res.code == 0) {
+                            vant.Toast('订餐成功');
+                            this.menuSaveLoading = false;
+                            this.initData();
+                        }
+                    }
+                    ).catch(err => {
+                        vant.Toast(`订餐失败${JSON.stringify(err)}`);
+                        this.menuSaveLoading = false;
+                    })
+                }
+            },
+            /**
+             * 单人获取token
+             */
+            getSingleToken(url) {
+                return new Promise((resolve, reject) => {
+                    let urlObj = new URL(url);
+                    const searchParams = urlObj.searchParams;
+                    let username = searchParams.get("username");
+                    let sign = searchParams.get("sign");
+                    let fetchUrl = apiUrls.userLoginUrl;
+                    let params = {
+                        username: username,
+                        sign: sign
+                    }
+                    fetch(fetchUrl, {
+                        method: 'POST',
+                        body: JSON.stringify(params),
+                        headers: new Headers({
+                            'Content-Type': 'application/json',
+                        })
+                    }).then(res => res.json()).then(res => {
+                        if (res.code == 0) {
+                            resolve(res.token);
+                        }
+                        else {
+                            return Promise.reject(res.msg);
+                        }
+                    }
+                    ).catch(err => {
+                        vant.Toast(`获取token失败${JSON.stringify(err)}`);
+                        reject(err);
+                    })
+                })
+            },
+            /**
+             * 存储人员列表
+             */
+            setPersonList() {
+                return new Promise((resolve, reject) => {
+                    let fetchUrl = `${apiUrls.setPersonListUrl}?name=${jsonFileName}`;
+                    fetch(fetchUrl, {
+                        method: 'POST',
+                        body: JSON.stringify(this.personList),
+                        headers: new Headers({
+                            'Content-Type': 'application/json',
+                        })
+                    }).then(res => res.json()).then(res => {
+                        if (res.code == 0) {
+                            vant.Toast(`存储人员列表成功`);
+                            resolve();
+                        }
+                    }
+                    ).catch(err => {
+                        vant.Toast(`存储人员列表失败${JSON.stringify(err)}`);
+                        reject();
+                    })
+                })
+            },
+            /**
+             * 刷新token
+             */
+            async refreshTokens() {
+                this.loading = true;
+                for (item of this.personList) {
+                    let idx = this.personList.indexOf(item);
+                    let { url } = item;
+                    try {
+                        let newToken = await this.getSingleToken(url)
+                        item.token = newToken;
+                    } catch (error) {
+                        this.deletePerson(idx);
+                    }
+                }
+                await this.setPersonList();
+                this.loading = false;
+                this.initPage();
+            },
+            /**
+             * 添加人员至列表
+             */
+            addPersonList() {
+                this.showDialog = true;
+            },
+            /**
+             * 提交新增人員窗口
+             */
+            async onSubmit(val) {
+                this.loading = true;
+                let { url } = val;
+                let token = await this.getSingleToken(url);
+                this.personList.push({ token, ...val });
+                await this.setPersonList();
+                this.onCancel();
+                this.loading = false;
+                this.initPage();
+            },
+            /**
+             * 取消窗口
+             */
+            onCancel() {
+                this.showDialog = false;
+                this.personForm = this.$options.data().personForm;
+                this.$nextTick(_ => {
+                    this.$refs['form'].resetValidation();
+                })
+            },
+            /**
+             * 删除人员
+             */
+            deletePerson(idx) {
+                let name = this.personList[idx].name;
+                this.$dialog.confirm({
+                    message: `确定删除${name}？`,
+                })
+                    .then(() => {
+                        // on confirm
+                        this.personList.splice(idx, 1);
+                        this.setPersonList();
+                    });
+            },
+            /**
+             * 取消订餐
+             */
+            cancelOrder(id) {
+                this.$dialog.confirm({
+                    message: `取消该次订餐？`,
+                })
+                    .then(() => {
+                        let fetchUrl = `${apiUrls.menuCancelUrl}/${id}`;
+                        fetch(fetchUrl).then(res => res.json()).then(res => {
+                            if (res.code == 0) {
+                                vant.Toast(`取消订餐成功`);
+                                this.initData();
+                            }
+                        }
+                        ).catch(err => {
+                            vant.Toast(`取消订餐失败${JSON.stringify(err)}`);
+                        })
+                    });
+
+            }
+        }
+    });
+    Vue.use(vant.Lazyload);
+</script>
+
+<style>
+    #app,
+    body,
+    html {
+        height: 100%;
+        width: 100%;
+        padding: 0;
+        margin: 0;
+        color: #323233;
+    }
+
+    .page_cont {
+        height: 100%;
+        width: 100%;
+        display: flex;
+        flex-direction: row;
+        justify-content: space-between;
+    }
+
+    .side_bar {
+        height: 100%;
+        overflow: scroll;
+        background-color: #f7f8fa;
+    }
+
+    .side_bar_item_title {
+        width: 100%;
+        height: 30px;
+        line-height: 30px;
+        position: relative;
+    }
+
+    .van-sidebar-item__text {
+        width: 100%;
+    }
+
+    .del_icon {
+        position: absolute;
+        top: -2px;
+        right: 0px;
+    }
+
+    .main_cont {
+        width: calc(100% - 80px);
+        height: 100%;
+        font-size: 13px;
+        position: relative;
+    }
+
+    .order_cont {
+        padding: 0 8px;
+    }
+
+    .menu_cont {
+        height: 100%;
+        width: 100%;
+    }
+
+    .wrapper {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        height: 100%;
+    }
+
+    .cb_group {
+        padding-bottom: 60px;
+    }
+
+    .btn_group {
+        box-sizing: border-box;
+        padding: 8px;
+        position: fixed;
+        right: 0;
+        bottom: 0;
+        display: flex;
+        flex-direction: row;
+        align-items: center;
+        justify-content: space-between;
+        width: calc(100% - 80px);
+        background-color: #fff;
+    }
+
+    .float_btns_cont {
+        position: absolute;
+        right: 9px;
+        bottom: 16px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: space-between;
+        height: auto;
+    }
+
+    .float_btns_cont>button {
+        box-shadow: 0 2px 12px 0 rgba(119, 132, 149, 0.2);
+    }
+
+    .van-tabs {
+        height: 100%;
+    }
+
+    .van-tabs__content {
+        height: calc(100% - 44px);
+        overflow-y: auto;
+    }
+
+    .dialog_btns {
+        margin: 16px;
+        display: flex;
+        flex-direction: row;
+        justify-content: space-between;
+        align-items: center;
+    }
+
+    .title_text {
+        font-weight: 500;
+    }
+
+    .title_text::before {
+        content: ' • ';
+    }
+
+    .cancel_btn {
+        float: right;
+        margin-right: calc(100% - 140px);
+    }
+
+    .van-sidebar-item--select::before {
+        background-color: rgb(175, 27, 45);
+        height: calc(100% - 20px);
+    }
+
+    .van-tabs__line {
+        background-color: rgb(175, 27, 45);
+    }
+
+    .van-button--danger {
+        background-color: rgb(175, 27, 45);
+        border-color: rgb(175, 27, 45);
+    }
+
+    .van-icon-plus:before {
+        color: rgb(119, 132, 149);
+        font-weight: 600;
+    }
+</style>
